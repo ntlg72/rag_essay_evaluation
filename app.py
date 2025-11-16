@@ -1,0 +1,700 @@
+import streamlit as st
+import os
+import tempfile
+import re
+from langchain_community.document_loaders import PyPDFLoader
+from backend.pipelines import main_evaluation_pipeline
+from backend.evaluation import create_evaluation_chain
+from backend.models import CustomLLM
+from backend.rag import create_vector_store
+from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.config import Config
+
+import streamlit as st
+import os
+import tempfile
+import re
+from langchain_community.document_loaders import PyPDFLoader
+from backend.pipelines import main_evaluation_pipeline
+from backend.evaluation import create_evaluation_chain
+from backend.models import CustomLLM
+from backend.rag import create_vector_store
+from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.config import Config
+
+# Función para parsear el análisis del modelo (mejorada para el formato específico)
+def parse_analysis(result):
+    fortalezas = []
+    oportunidades = []
+    
+    # Buscar sección de Fortalezas (flexible con numeración y títulos, excluyendo puntuación)
+    fort_match = re.search(r'(?i)(1\.|Fortalezas|aspectos destacados)\s*([\s\S]*?)(?=(?i)(2\.|Áreas de mejora|oportunidades|3\.|conclusión|Puntuación))', result)
+    if fort_match:
+        fort_section = fort_match.group(2).strip()
+        # Filtrar para evitar puntuación si se cuela
+        fort_section = re.sub(r'(?i)Puntuación.*', '', fort_section).strip()
+        # Si hay bullets, extraerlos
+        fort_bullets = re.findall(r'[\*\-]\s*(.+?)(?=\n[\*\-]|\n\n|$)', fort_section, re.DOTALL)
+        if fort_bullets:
+            for bullet in fort_bullets:
+                bullet = bullet.strip().lstrip('* -').strip()
+                if len(bullet) > 50 and 'Puntuación' not in bullet:  # Evitar líneas cortas y puntuación
+                    # Extraer título de frases en quotes si existe, sino usar primera frase corta como título y resto como desc
+                    quote_match = re.search(r'"([^"]+)"', bullet)
+                    if quote_match:
+                        title = quote_match.group(1)
+                        desc = bullet.replace(quote_match.group(0), "").strip()
+                    else:
+                        # Split en primera oración para título
+                        title_match = re.match(r'([^.]+?)\.', bullet)
+                        title = title_match.group(1).strip() if title_match else bullet.split('.')[0].strip()
+                        desc = bullet.replace(title, "").strip()
+                    title = title[:50] + "..." if len(title) > 50 else title
+                    desc = desc[:300] + "..." if len(desc) > 300 else desc
+                    fortalezas.append((title, desc))
+        else:
+            # Si no hay bullets, split por "Además" o puntos para crear ítems
+            sentences = re.split(r'(Además|Adicionalmente)', fort_section)
+            for i in range(0, len(sentences), 2):
+                sentence = sentences[i].strip()
+                if len(sentence) > 50:
+                    quote_match = re.search(r'"([^"]+)"', sentence)
+                    title = quote_match.group(1) if quote_match else sentence.split('.')[0].strip()
+                    desc = sentence.replace(quote_match.group(0) if quote_match else title, "").strip()
+                    title = title[:50] + "..." if len(title) > 50 else title
+                    desc = desc[:300] + "..." if len(desc) > 300 else desc
+                    fortalezas.append((title, desc))
+    
+    # Buscar sección de Áreas de mejora/Oportunidades
+    opp_match = re.search(r'(?i)(2\.|Áreas de mejora|oportunidades)\s*([\s\S]*?)(?=(?i)(conclusión|puntuación|4\.|$))', result)
+    if opp_match:
+        opp_section = opp_match.group(2).strip()
+        # Filtrar para evitar puntuación si se cuela
+        opp_section = re.sub(r'(?i)Puntuación.*', '', opp_section).strip()
+        # Extraer bullets con colon para oportunidades (título: descripción)
+        opp_bullets = re.findall(r'[\*\-]\s*([^:\n]+?)(?::\s*(.*?))?(?=\n[\*\-]|\n\n|$)', opp_section, re.DOTALL)
+        for title, desc in opp_bullets:
+            title = title.strip().lstrip('* -').strip()
+            desc = desc.strip() if desc else "Área de mejora identificada."
+            if len(title) > 0 and title.lower() in ['contenido', 'organización', 'estilo', 'mecánica'] and 'Puntuación' not in title:
+                title = title.capitalize()
+                desc = desc[:300] + "..." if len(desc) > 300 else desc
+                oportunidades.append((title, desc))
+    
+    # Fallback si no se encuentran bullets
+    if not fortalezas:
+        fortalezas = [("Punto de vista", "El ensayo desarrolla un punto de vista viable sobre el tema.")]
+    if not oportunidades:
+        oportunidades = [("Contenido", "El punto de vista se ve afectado por una débil capacidad de pensamiento crítico.")]
+    
+    return fortalezas, oportunidades
+
+# Configuración
+
+# Configuración de página
+st.set_page_config(
+    page_title="Evaluador Académico de Ensayos",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+    <style>
+    /* Fondo principal personalizado */
+    body, .main, .block-container {
+        background-color: #F5F7F7 !important;
+    }
+
+    /* Header claro */
+    [data-testid="stHeader"] {
+        background-color: #F5F7F7 !important;
+    }
+
+    /* Sidebar profesional */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #A6B8B8 0%, #DDEBF7 100%) !important;
+        border-right: 2px solid #d4e7f0;
+        padding: 1.5rem !important;
+        box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    }
+
+    section[data-testid="stSidebar"] * {
+        color: #2c3e50 !important;
+    }
+
+    .main-header {
+        font-size: 2.8rem;
+        color: #1a5f7a;
+        text-align: center;
+        margin-bottom: 0.5rem;
+        font-weight: 700;
+        font-family: 'Georgia', serif;
+    }
+    .sub-header {
+        font-size: 1.3rem;
+        color: #2d8c9f;
+        text-align: center;
+        margin-bottom: 2rem;
+        font-weight: 300;
+        font-style: italic;
+    }
+    .section-header {
+        font-size: 1.5rem;
+        color: #1a5f7a;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #e6f3f7;
+        padding-bottom: 0.5rem;
+        font-weight: 600;
+        font-family: 'Georgia', serif;
+    }
+
+    .premium-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+        padding: 1.5rem;
+        border-radius: 20px;
+        border: 2px solid #e6f3f7;
+        box-shadow: 0 8px 25px rgba(26, 95, 122, 0.1);
+        margin-bottom: 1.5rem;
+        transition: all 0.3s ease;
+        color: #2c3e50;
+    }
+    .premium-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 35px rgba(26, 95, 122, 0.15);
+        border-color: #2d8c9f;
+    }
+
+    .metric-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%);
+        padding: 1.5rem;
+        border-radius: 18px;
+        border: 2px solid #d4e7f0;
+        box-shadow: 0 6px 20px rgba(26, 95, 122, 0.08);
+        margin-bottom: 1rem;
+        text-align: center;
+        transition: all 0.3s ease;
+        color: #2c3e50;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(26, 95, 122, 0.12);
+    }
+
+    .stButton button {
+        background: linear-gradient(135deg, #2d8c9f 0%, #1a5f7a 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        padding: 0.7rem 2rem;
+        font-weight: 600;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(45, 140, 159, 0.3);
+    }
+    .stButton button:hover {
+        background: linear-gradient(135deg, #268191 0%, #15506b 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(45, 140, 159, 0.4);
+    }
+
+    .stTextArea textarea {
+        border: 2px solid #d4e7f0;
+        border-radius: 15px;
+        padding: 1.2rem;
+        font-size: 1rem;
+        font-family: 'Arial', sans-serif;
+        transition: all 0.3s ease;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+        color: #2c3e50 !important;
+    }
+    .stTextArea textarea:focus {
+        border-color: #2d8c9f;
+        box-shadow: 0 0 0 3px rgba(45, 140, 159, 0.1);
+        color: #2c3e50 !important;
+    }
+
+    .stTextInput input, .stTextArea textarea, .stSelectbox select {
+        color: #2c3e50 !important;
+    }
+
+    .streamlit-expanderContent {
+        color: #2c3e50 !important;
+    }
+
+    .stProgress > div > div > div {
+        background: linear-gradient(90deg, #2d8c9f 0%, #1a5f7a 100%);
+        border-radius: 10px;
+    }
+
+    .streamlit-expanderHeader {
+        background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+        border-radius: 12px;
+        border: 2px solid #e6f3f7;
+        font-weight: 600;
+        color: #1a5f7a;
+        font-family: 'Georgia', serif;
+    }
+    .streamlit-expanderHeader:hover {
+        background: linear-gradient(135deg, #f8fbff 0%, #e6f3f7 100%);
+    }
+
+    .academic-badge {
+        background: linear-gradient(135deg, #2d8c9f, #1a5f7a);
+        color: white;
+        padding: 0.4rem 1rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: inline-block;
+        margin: 0.2rem;
+    }
+
+    p, div, span, h1, h2, h3, h4, h5, h6, li {
+        color: #2c3e50 !important;
+    }
+
+    .evaluation-result {
+        color: #2c3e50 !important;
+        background-color: #f8fbff;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid #e6f3f7;
+        line-height: 1.6;
+    }
+
+    .stAlert {
+        color: #2c3e50 !important;
+    }
+
+    /* User icon styling */
+    .user-icon-container {
+        text-align: center;
+        margin: 1rem 0;
+        padding: 1rem;
+        background: rgba(255,255,255,0.7);
+        border-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    /* List styling for dynamic content */
+    .dynamic-list {
+        list-style-type: disc;
+        padding-left: 1.5rem;
+        margin: 0.5rem 0;
+    }
+    .dynamic-list li {
+        margin-bottom: 0.5rem;
+        color: #1a5f7a;
+    }
+    .dynamic-item {
+        margin-bottom: 0.8rem;
+    }
+    .dynamic-title {
+        font-weight: bold;
+        color: #1a5f7a;
+    }
+    .dynamic-desc {
+        color: #2c3e50;
+        margin-top: 0.2rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Header principal con diseño académico claro
+st.markdown("""
+    <div style='text-align: center; padding: 2rem 0; background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%); border-radius: 20px; margin-bottom: 2rem; border: 2px solid #e6f3f7;'>
+        <h1 class="main-header">📚 Evaluador Académico de Ensayos</h1>
+        <p class="sub-header">Herramienta profesional para la evaluación objetiva de ensayos académicos</p>
+        <div style='margin-top: 1rem;'>
+            <span class="academic-badge">🏫 Entorno Educativo</span>
+            <span class="academic-badge">📊 Evaluación Objetiva</span>
+            <span class="academic-badge">🎯 Criterios Pedagógicos</span>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+
+# Inicialización de session state
+if 'qa_chain' not in st.session_state:
+    st.session_state.qa_chain = None
+if 'retriever' not in st.session_state:
+    st.session_state.retriever = None
+
+qa_chain = st.session_state.qa_chain
+retriever = st.session_state.retriever
+
+# Sidebar profesional
+with st.sidebar:
+    st.markdown("""
+        <div style='padding: 1rem; text-align: center;'>
+            <h2 style='color: #1a5f7a; font-family: Georgia, serif; margin-bottom: 1rem;'>⚙️ Panel del Docente</h2>
+            <div style='background: linear-gradient(135deg, #ffffff, #f8fbff); padding: 1rem; border-radius: 15px; border: 2px solid #e6f3f7; margin: 1rem 0;'>
+                <p style='color: #2d8c9f; font-size: 0.9rem;'>Configuración académica para evaluación de ensayos</p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Icono dummy de usuario
+    st.markdown("""
+        <div class="user-icon-container">
+            <img src='https://i.pinimg.com/736x/f6/bc/9a/f6bc9a75409c4db0acf3683bab1fab9c.jpg' alt='Usuario Dummy' style='border-radius: 50%; border: 3px solid #ffffff;'>
+            <p style='color: #2c3e50; font-size: 0.9rem; margin-top: 0.5rem; font-weight: 500;'>Docente Invitado</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Carga de rúbrica personalizada
+    uploaded_rubric = st.file_uploader(
+        "📄 Cargar Rúbrica Personalizada (PDF)",
+        type="pdf",
+        help="Suba un archivo PDF con los criterios de evaluación para usarlo en lugar de la rúbrica predeterminada."
+    )
+    rubric_path = None
+    if uploaded_rubric is not None:
+        # Guardar archivo temporal
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_rubric.getvalue())
+            rubric_path = tmp_file.name
+        st.success("✅ Rúbrica cargada exitosamente. Se usará para la evaluación.")
+
+    # Inicialización del sistema
+    if st.button("🔄 Inicializar Sistema de Evaluación", use_container_width=True):
+        with st.spinner("🔄 Inicializando componentes académicos..."):
+            try:
+                progress_bar = st.progress(0)
+                progress_text = st.empty()
+                
+                progress_text.text("Cargando rúbricas...")
+                if uploaded_rubric is not None:
+                    loader = PyPDFLoader(rubric_path)
+                else:
+                    loader = PyPDFLoader(Config.DRIVE_PATH)
+                documents = loader.load()
+                if not documents:
+                    raise ValueError("No se pudieron cargar documentos de la rúbrica")
+                progress_bar.progress(20)
+                
+                progress_text.text("Creando vector store...")
+                vector_store = create_vector_store(documents)
+                retriever_temp = vector_store.as_retriever(search_kwargs={"k": Config.TOP_K_RETRIEVAL}) if vector_store else None
+                progress_bar.progress(50)
+                
+                progress_text.text("Inicializando LLMs...")
+                regressor_llm = CustomLLM(Config.MODEL_PATH)
+                generative_llm = ChatGoogleGenerativeAI(
+                    model=Config.GEMINI_MODEL,
+                    temperature=0,
+                    google_api_key=Config.GOOGLE_API_KEY
+                )
+                qa_chain_temp = create_evaluation_chain(regressor_llm, generative_llm, retriever_temp)
+                progress_bar.progress(100)
+                
+                # Almacenar en session state
+                st.session_state.qa_chain = qa_chain_temp
+                st.session_state.retriever = retriever_temp
+                
+                qa_chain = st.session_state.qa_chain
+                retriever = st.session_state.retriever
+                
+                st.success("""
+                ✅ **Sistema listo para evaluación**
+                \nModelos cargados correctamente para análisis académico.
+                """)
+            except Exception as e:
+                st.error(f"❌ Error en inicialización: {str(e)}")
+                st.info("💡 Verifique la configuración de los modelos y el archivo PDF de rúbricas")
+                st.session_state.qa_chain = None
+                st.session_state.retriever = None
+                qa_chain = None
+                retriever = None
+
+# Sección principal de entrada del ensayo
+st.markdown("""
+    <div class="premium-card">
+        <div style='color: #1a5f7a;'>
+            <h2 class="section-header">📝 Ingreso del Ensayo Académico</h2>
+        </div>
+        <p style='color: #2d8c9f; font-size: 1rem;'>Ingrese el ensayo para evaluación según criterios pedagógicos establecidos</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# Layout mejorado para entrada
+col1, col2 = st.columns([3, 1])
+with col1:
+    essay = st.text_area(
+        "**Texto del ensayo:**",
+        height=350,
+        placeholder="""Ejemplo académico:
+
+INTRODUCCIÓN
+El cambio climático representa uno de los desafíos más significativos de nuestro tiempo. Este ensayo examina sus causas fundamentales, impactos multidimensionales y las estrategias de mitigación más efectivas.
+
+DESARROLLO
+Las emisiones de gases de efecto invernadero, principalmente por actividades humanas, constituyen la principal causa...
+
+CONCLUSIÓN
+En síntesis, la acción coordinada a nivel global es imperativa para enfrentar este desafío ambiental.""",
+        key="essay_input",
+        help="Recomendación: 300-1000 palabras para una evaluación óptima"
+    )
+
+with col2:
+    st.markdown("""
+    <div class="premium-card">
+        <div style='text-align: center; color: #1a5f7a; margin-bottom: 1rem;'>
+            <h4>🎓 Criterios de Evaluación</h4>
+        </div>
+        <div style='background: #e6f3f7; padding: 1rem; border-radius: 12px;'>
+            <p style='font-size: 0.9rem; color: #1a5f7a; margin: 0.5rem 0;'>✓ <strong>Contenido:</strong> Profundidad y precisión</p>
+            <p style='font-size: 0.9rem; color: #1a5f7a; margin: 0.5rem 0;'>✓ <strong>Organización:</strong> Estructura lógica</p>
+            <p style='font-size: 0.9rem; color: #1a5f7a; margin: 0.5rem 0;'>✓ <strong>Estilo:</strong> Claridad y formalidad</p>
+            <p style='font-size: 0.9rem; color: #1a5f7a; margin: 0.5rem 0;'>✓ <strong>Mecánica:</strong> Gramática y ortografía</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Estadísticas en tiempo real
+    if essay:
+        word_count = len(essay.split())
+        char_count = len(essay)
+        paragraph_count = len([p for p in essay.split('\n\n') if p.strip()])
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4 style='color: #1a5f7a; margin-bottom: 1rem;'>📊 Estadísticas</h4>
+            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;'>
+                <div style='text-align: center;'>
+                    <h5 style='color: #2d8c9f; margin: 0;'>{word_count}</h5>
+                    <p style='font-size: 0.8rem; color: #1a5f7a; margin: 0;'>Palabras</p>
+                </div>
+                <div style='text-align: center;'>
+                    <h5 style='color: #2d8c9f; margin: 0;'>{char_count}</h5>
+                    <p style='font-size: 0.8rem; color: #1a5f7a; margin: 0;'>Caracteres</p>
+                </div>
+                <div style='text-align: center;'>
+                    <h5 style='color: #2d8c9f; margin: 0;'>{paragraph_count}</h5>
+                    <p style='font-size: 0.8rem; color: #1a5f7a; margin: 0;'>Párrafos</p>
+                </div>
+                <div style='text-align: center;'>
+                    <h5 style='color: {'#27ae60' if 300 <= word_count <= 1000 else '#e67e22'}; margin: 0;'>
+                        {'✅ Óptimo' if 300 <= word_count <= 1000 else '⚠️ Revisar'}
+                    </h5>
+                    <p style='font-size: 0.8rem; color: #1a5f7a; margin: 0;'>Longitud</p>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# Botón de evaluación
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    evaluate_btn = st.button("🎯 Iniciar Evaluación Académica", type="primary", use_container_width=True)
+
+if evaluate_btn:
+    if not essay.strip():
+        st.warning("""
+        ⚠️ **Por favor, ingrese un ensayo para evaluar**
+        \nEl campo de texto no puede estar vacío.
+        """)
+    elif qa_chain is None:
+        st.error("""
+        ❌ **Sistema no inicializado**
+        \nPor favor, inicialice el sistema desde el panel del docente primero.
+        """)
+    else:
+        # Proceso de evaluación
+        with st.spinner("🔍 Realizando análisis académico..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("📖 Analizando estructura del ensayo...")
+            progress_bar.progress(30)
+            
+            status_text.text("🎓 Aplicando criterios pedagógicos...")
+            progress_bar.progress(60)
+            
+            try:
+                result = qa_chain.invoke({"essay": essay})
+                progress_bar.progress(90)
+                
+                status_text.text("📊 Generando informe de evaluación...")
+                progress_bar.progress(100)
+                
+                st.balloons()
+                st.success("✅ Evaluación académica completada exitosamente")
+                
+            except Exception as e:
+                st.error(f"❌ Error durante la evaluación: {str(e)}")
+                st.stop()
+
+        # SECCIÓN DE RESULTADOS
+        st.markdown("""
+            <div class="premium-card">
+                <div style='color: #1a5f7a;'>
+                    <h2 class="section-header">📊 Resultados de la Evaluación</h2>
+                </div>
+                <p style='color: #2d8c9f;'>Análisis completo basado en criterios académicos establecidos</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Puntuaciones en tarjetas (del app.txt original)
+        score_rubrica = None
+        score_modelo = None
+        
+        if "Puntuación rúbrica:" in result and "Puntuación modelo:" in result:
+            try:
+                score_rubrica = result.split("Puntuación rúbrica: ")[1].split("/")[0].strip()
+                score_modelo = result.split("Puntuación modelo: ")[1].split("/")[0].strip()
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div style='color: #1a5f7a; margin-bottom: 1rem;'>
+                            <h4>📋 Rúbrica Académica</h4>
+                        </div>
+                        <div style='font-size: 2.5rem; font-weight: bold; color: #1a5f7a; margin: 1rem 0;'>
+                            {score_rubrica}<span style='font-size: 1rem; color: #2d8c9f;'>/6</span>
+                        </div>
+                        <p style='color: #2d8c9f; font-size: 0.9rem;'>Criterios pedagógicos establecidos</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div style='color: #1a5f7a; margin-bottom: 1rem;'>
+                            <h4>🤖 Evaluación IA</h4>
+                        </div>
+                        <div style='font-size: 2.5rem; font-weight: bold; color: #1a5f7a; margin: 1rem 0;'>
+                            {score_modelo}<span style='font-size: 1rem; color: #2d8c9f;'>/6</span>
+                        </div>
+                        <p style='color: #2d8c9f; font-size: 0.9rem;'>Análisis automático avanzado</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    diff = abs(int(score_rubrica) - int(score_modelo))
+                    if diff <= 1:
+                        consistency = "Alta"
+                        color = "#27ae60"
+                        icon = "✅"
+                    elif diff <= 2:
+                        consistency = "Media"
+                        color = "#e67e22"
+                        icon = "⚠️"
+                    else:
+                        consistency = "Baja"
+                        color = "#e74c3c"
+                        icon = "🔍"
+                    
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div style='color: #1a5f7a; margin-bottom: 1rem;'>
+                            <h4>⚖️ Consistencia</h4>
+                        </div>
+                        <div style='font-size: 2rem; font-weight: bold; color: {color}; margin: 1rem 0;'>
+                            {icon} {consistency}
+                        </div>
+                        <p style='color: #2d8c9f; font-size: 0.9rem;'>Concordancia entre evaluaciones</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+            except Exception as e:
+                st.info("""
+                📝 **Evaluación cualitativa generada**
+                \nRevise el análisis detallado para información completa sobre el ensayo.
+                """)
+        
+        # Parsear fortalezas y oportunidades usando la función
+        fortalezas_list, oportunidades_list = parse_analysis(result)
+        
+        # Generar HTML para fortalezas
+        fortalezas_html = ""
+        for title, desc in fortalezas_list:
+            fortalezas_html += f"""
+            <div class="dynamic-item">
+                <div class="dynamic-title">{title}</div>
+                <div class="dynamic-desc">{desc}</div>
+            </div>
+            """
+        
+        # Generar HTML para oportunidades
+        oportunidades_html = ""
+        for title, desc in oportunidades_list:
+            oportunidades_html += f"""
+            <div class="dynamic-item">
+                <div class="dynamic-title">{title}</div>
+                <div class="dynamic-desc">{desc}</div>
+            </div>
+            """
+
+        # RECOMENDACIONES PEDAGÓGICAS (dinámicas, antes del análisis detallado)
+        st.markdown("""
+            <div class="premium-card">
+                <div style='color: #1a5f7a;'>
+                    <h2 class="section-header">💡 Recomendaciones Pedagógicas</h2>
+                </div>
+                <p style='color: #2d8c9f;'>Orientaciones para la mejora del proceso de escritura académica</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        rec_col1, rec_col2 = st.columns(2)
+        
+        with rec_col1:
+            st.markdown(f"""
+            <div class="premium-card">
+                <h4 style='color: #1a5f7a; margin-bottom: 1rem;'>🎯 Aspectos Destacados</h4>
+                <div style='background: #e6f3f7; padding: 1rem; border-radius: 12px; max-height: 300px; overflow-y: auto;'>
+                    <div style='color: #1a5f7a; margin: 0.8rem 0;'>{fortalezas_html}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with rec_col2:
+            st.markdown(f"""
+            <div class="premium-card">
+                <h4 style='color: #1a5f7a; margin-bottom: 1rem;'>📈 Oportunidades de Mejora</h4>
+                <div style='background: #fff8e1; padding: 1rem; border-radius: 12px; max-height: 300px; overflow-y: auto;'>
+                    <div style='color: #1a5f7a; margin: 0.8rem 0;'>{oportunidades_html}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Análisis detallado (después de las recomendaciones)
+        with st.expander("🔍 **Análisis Pedagógico Detallado**", expanded=True):
+            st.markdown("""
+                <div class="evaluation-result">
+                    <h4 style='color: #1a5f7a; margin-bottom: 1rem;'>Evaluación Completa del Ensayo</h4>
+            """, unsafe_allow_html=True)
+            st.markdown(result)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+# Limpiar archivo temporal si existe
+if 'rubric_path' in locals() and rubric_path and os.path.exists(rubric_path):
+    try:
+        os.unlink(rubric_path)
+    except:
+        pass
+
+# Pie de página
+st.markdown("---")
+st.markdown("""
+    <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #ffffff, #f8fbff); border-radius: 15px; border: 2px solid #e6f3f7;'>
+        <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;'>
+            <div style='text-align: left;'>
+                <h4 style='color: #1a5f7a; margin: 0;'>🏫 Evaluador Académico</h4>
+                <p style='color: #2d8c9f; font-size: 0.9rem; margin: 0.5rem 0;'>Herramienta profesional para docentes</p>
+            </div>
+            <div style='text-align: center;'>
+                <p style='color: #1a5f7a; margin: 0;'><strong>🛠️ Plataforma Educativa</strong></p>
+                <p style='color: #2d8c9f; font-size: 0.9rem; margin: 0;'>Streamlit • LangChain • Transformers</p>
+            </div>
+            <div style='text-align: right;'>
+                <p style='color: #1a5f7a; margin: 0;'><strong>📚 Versión Académica 2.1</strong></p>
+                <p style='color: #2d8c9f; font-size: 0.9rem; margin: 0;'>Noviembre 2025</p>
+            </div>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
