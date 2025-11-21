@@ -28,7 +28,7 @@ def parse_analysis(result):
     oportunidades = []
     
     # Buscar sección de Fortalezas (flexible con numeración y títulos, excluyendo puntuación)
-    fort_match = re.search(r'(?i)(1\.|Fortalezas|aspectos destacados)\s*([\s\S]*?)(?=(?i)(2\.|Áreas de mejora|oportunidades|3\.|conclusión|Puntuación))', result)
+    fort_match = re.search(r'(?i)(1\.|Fortalezas|aspectos destacados)\s*([\s\S]*?)(?=(2\.|Áreas de mejora|oportunidades|3\.|conclusión|Puntuación))', result, re.IGNORECASE | re.DOTALL)
     if fort_match:
         fort_section = fort_match.group(2).strip()
         # Filtrar para evitar puntuación si se cuela
@@ -66,7 +66,7 @@ def parse_analysis(result):
                     fortalezas.append((title, desc))
     
     # Buscar sección de Áreas de mejora/Oportunidades
-    opp_match = re.search(r'(?i)(2\.|Áreas de mejora|oportunidades)\s*([\s\S]*?)(?=(?i)(conclusión|puntuación|4\.|$))', result)
+    opp_match = re.search(r'(?i)(2\.|Áreas de mejora|oportunidades)\s*([\s\S]*?)(?=(conclusión|puntuación|4\.|$))', result, re.IGNORECASE | re.DOTALL)
     if opp_match:
         opp_section = opp_match.group(2).strip()
         # Filtrar para evitar puntuación si se cuela
