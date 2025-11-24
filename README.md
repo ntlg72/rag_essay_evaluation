@@ -1,8 +1,6 @@
-# RAG Essay Evaluation
-Python
-Streamlit
-License: MIT
-Hugging Face
+# RAG Essay Evaluation System — Evaluación Automática de Ensayos con RAG + LLMs + Streamlit 
+---
+
 ## Descripción
 RAG Essay Evaluation es una aplicación web híbrida para la evaluación automática de ensayos académicos en una escala de 1-6, utilizando técnicas de Retrieval-Augmented Generation (RAG). Combina:
 
@@ -12,39 +10,33 @@ LLM generativo (Gemini API) para feedback cualitativo estructurado (fortalezas, 
 
 Desarrollado para entornos educativos, resuelve la subjetividad en calificaciones manuales, ofreciendo análisis accionable. Soporta despliegue local (Streamlit) o en cloud (Hugging Face Spaces).
 
-#### Características Principales
+---
+## Características Principales
 
 Interfaz intuitiva con Streamlit: Ingresa ensayo → Obtén score + feedback.
 Parsing dinámico de resultados para listas visuales.
 Métricas RAGAS opcionales (context_precision, context_recall).
 Modular: Backend separado para ML/RAG, frontend para UI.
 Compatible con CPU; GPU opcional para aceleración.
-Aquí tienes el README en formato Markdown listo para pegar en GitHub, respetando las convenciones estándar, con títulos, emojis, tablas y bloques de código:
-
-
-# 📚 RAG Essay Evaluation System — Evaluación Automática de Ensayos con RAG + LLMs + Streamlit  
-
-Este proyecto implementa un sistema completo de **evaluación automática de ensayos académicos** utilizando **RAG (Retrieval-Augmented Generation)**, modelos de lenguaje avanzados y una **aplicación web en Streamlit**.  
-Incluye módulos para recuperación de información, inferencia, entrenamiento, evaluación, carga de rúbricas y una UI que permite evaluar ensayos en tiempo real desde el navegador.
 
 ---
 
-## 🎯 Objetivo del Proyecto
+## Objetivo del Proyecto
 
 El objetivo principal es construir un pipeline integral capaz de:
 
-- 📥 Cargar y procesar rúbricas académicas (PDF)  
-- 🔍 Recuperar información relevante con RAG  
-- 🧠 Generar evaluaciones automáticas usando modelos LLM entrenados  
-- 📝 Calificar ensayos académicos según rúbricas holísticas  
-- 📊 Entrenar y comparar modelos  
-- 🌐 Proveer una interfaz web en Streamlit  
+- Cargar y procesar rúbricas académicas (PDF)  
+- Recuperar información relevante con RAG  
+- Generar evaluaciones automáticas usando modelos LLM entrenados  
+- Calificar ensayos académicos según rúbricas holísticas  
+- Entrenar y comparar modelos  
+- Proveer una interfaz web en Streamlit  
 
 Este sistema está diseñado para investigación, desarrollo académico y experimentación en evaluación automática de textos.
 
 ---
 
-## 📂 Estructura del Repositorio
+## Estructura del Repositorio
 
 ```
 rag_essay_evaluation-main/
@@ -54,7 +46,7 @@ rag_essay_evaluation-main/
 │
 ├── backend/
 │   ├── config.py         # Configuraciones globales
-│   ├── evaluation.py     # Métricas de performance
+│   ├── evaluation.py     # Métricas de RAGAS
 │   ├── inference.py      # Pipeline de inferencia principal
 │   ├── models.py         # Carga de modelos y tokenizers
 │   ├── pipelines.py      # Pipelines de entrenamiento e inferencia
@@ -71,30 +63,27 @@ rag_essay_evaluation-main/
 │   └── ...
 │
 ├── models/
-│   ├── tokenizer/        # Tokenizador del modelo
-│   └── results/
-│       └── checkpoint-XXXX/  # Modelos entrenados
+│       
 │
 └── ...
 ```
 
 ---
 
-## 🧠 Tecnologías Utilizadas
+## Tecnologías Utilizadas
 
-- 🐍 Python 3.10+  
-- 🎨 **Streamlit**  
-- 🤗 HuggingFace Transformers  
-- 🔥 PyTorch  
-- 🔍 RAG (FAISS / embeddings)  
-- 📘 Pandas, NumPy  
-- 🧪 Scikit-learn  
-- 📄 Procesamiento de PDF  
-- 💾 Checkpoints de modelos LLM  
+- Python 3.10+  
+- **Streamlit**  
+- HuggingFace Transformers  
+- PyTorch  
+- RAG (Supabase / embeddings)  
+- Pandas, NumPy  
+- Scikit-learn  
+- Procesamiento de PDF   
 
 ---
 
-## 📋 Requisitos Previos
+##  Requisitos Previos
 
 Asegúrate de tener instalado:
 
@@ -105,16 +94,16 @@ Asegúrate de tener instalado:
 
 ---
 
-## 🛠️ Instalación
+## Instalación
 
-### 1️⃣ Clonar el repositorio
+### Clonar el repositorio
 
 ```
-git clone <URL_DE_TU_REPO>
+git clone https://github.com/ntlg72/rag_essay_evaluation.git
 cd rag_essay_evaluation-main
 ```
 
-### 2️⃣ Crear un entorno virtual
+### Crear un entorno virtual
 
 ```
 python -m venv venv
@@ -122,7 +111,7 @@ source venv/bin/activate     # Linux / Mac
 venv\Scripts\activate        # Windows
 ```
 
-### 3️⃣ Instalar dependencias
+### Instalar dependencias
 
 ```
 pip install -r requirements.txt
@@ -130,7 +119,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🌐 Ejecutar la Aplicación Streamlit
+## Ejecutar la Aplicación Streamlit
 
 La aplicación principal se encuentra en:
 
@@ -160,32 +149,7 @@ La interfaz permite:
 
 ---
 
-## 🚀 Ejecución Avanzada (CLI)
-
-Ejecutar inferencia completa (RAG + modelo):
-
-```
-python app.py --essay "Tu ensayo aquí" --rubric data/Rubric_Holistic Essay Scoring.pdf
-```
-
-Inferencia simple con LLM:
-
-```
-python backend/inference.py --text "Ensayo aquí"
-```
-
-Usar el módulo RAG directamente:
-
-```
-from backend.rag import RAGPipeline
-
-rag = RAGPipeline()
-context = rag.retrieve("Texto del ensayo…")
-```
-
----
-
-## 🎓 Entrenamiento del Modelo
+## Entrenamiento del Modelo
 
 Ejecutar el script:
 
@@ -201,7 +165,7 @@ Este script:
 
 ---
 
-## 📊 Evaluación del Modelo
+## Evaluación del RAG
 
 ```
 python backend/evaluation.py
@@ -209,23 +173,22 @@ python backend/evaluation.py
 
 Métricas generadas:
 
-- RMSE  
-- MAE  
-- Correlación  
-- Comparación predicción vs puntaje real  
+- Context Precision
+- Context Recall
+- Faithfulness
 
 ---
 
-## 🧩 Explicación de Carpetas
+## Explicación de Carpetas
 
-- 🧠 backend/: Core del proyecto: RAG, modelos, entrenamiento, inferencia, evaluación, utilidades.  
-- 📁 data/: Datasets, rúbricas, ejemplos de submission.  
-- 🤗 models/: Modelos entrenados y tokenizers.  
-- 🌐 app.py: Aplicación completa en Streamlit.  
+- backend/: Core del proyecto: RAG, modelos, entrenamiento, inferencia, evaluación, utilidades.  
+- data/: Datasets, rúbricas, ejemplos de submission.  
+- models/: Modelos entrenados y tokenizers.  
+- app.py: Aplicación completa en Streamlit.  
 
 ---
 
-## 📌 Notas Importantes
+## Notas Importantes
 
 - La app SIEMPRE corre en el puerto 8501 (Streamlit).  
 - Los checkpoints deben ir en la carpeta models/results/.  
@@ -233,3 +196,7 @@ Métricas generadas:
 - Si usas CPU, ajusta parámetros en backend/config.py para evitar desbordes de memoria.  
 
 ---
+## Autores
+- Juan David Daza Rivera
+- Natalia Lopez Gallego
+- Michel Dahiana Burgos Santos 
