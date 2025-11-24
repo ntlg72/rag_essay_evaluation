@@ -21,7 +21,7 @@ Modular: Backend separado para ML/RAG, frontend para UI.
 Compatible con CPU; GPU opcional para aceleración.
 Aquí tienes el README en formato Markdown listo para pegar en GitHub, respetando las convenciones estándar, con títulos, emojis, tablas y bloques de código:
 
-```markdown
+
 # 📚 RAG Essay Evaluation System — Evaluación Automática de Ensayos con RAG + LLMs + Streamlit  
 
 Este proyecto implementa un sistema completo de **evaluación automática de ensayos académicos** utilizando **RAG (Retrieval-Augmented Generation)**, modelos de lenguaje avanzados y una **aplicación web en Streamlit**.  
